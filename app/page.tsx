@@ -1,11 +1,13 @@
 "use client";
 
 import { FormEvent, useEffect, useMemo, useState } from "react";
-import { ArrowRight, ArrowUpRight, ChevronRight, Menu, Minus, Plus, Search, ShoppingBag, Trash2, X } from "lucide-react";
+import { ArrowRight, ArrowUpRight, ChevronRight, Menu, Minus, Plus, Search, ShoppingBag, Trash2, UserRound, X } from "lucide-react";
+import { GoogleAuthProvider, onAuthStateChanged, signInWithPopup, signOut, type User as FirebaseUser } from "firebase/auth";
 import { toast } from "sonner";
 import { Toaster } from "@/components/ui/sonner";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import { getFirebaseAuth } from "@/lib/firebase";
 
 type Product = {
   id: string; name: string; price: number; category: string; material: string;
@@ -78,6 +80,8 @@ export default function Storefront() {
   const [material, setMaterial] = useState("All");
   const [price, setPrice] = useState("All");
   const [sort, setSort] = useState("featured");
+  const [user, setUser] = useState<FirebaseUser | null>(null);
+  const [authBusy, setAuthBusy] = useState(false);
 
   useEffect(() => {
     setRoute(routeFromPath());
@@ -89,6 +93,11 @@ export default function Storefront() {
     return () => window.removeEventListener("popstate", onPop);
   }, []);
   useEffect(() => { if (hydrated) window.localStorage.setItem("of-table-cart", JSON.stringify(cart)); }, [cart, hydrated]);
+  useEffect(() => {
+    const auth = getFirebaseAuth();
+    if (!auth) return;
+    return onAuthStateChanged(auth, setUser);
+  }, []);
   useEffect(() => {
     const context = (document as WebMcpDocument).modelContext;
     if (!context?.registerTool) return;
@@ -156,6 +165,33 @@ export default function Storefront() {
     navigate("/shop");
   };
 
+  const handleAuth = async () => {
+    const auth = getFirebaseAuth();
+    if (!auth) {
+      toast.info("Firebase 연결을 준비하고 있습니다.");
+      return;
+    }
+    setAuthBusy(true);
+    try {
+      if (auth.currentUser) {
+        await signOut(auth);
+        toast.success("로그아웃했습니다.");
+      } else {
+        const provider = new GoogleAuthProvider();
+        provider.setCustomParameters({ prompt: "select_account" });
+        const result = await signInWithPopup(auth, provider);
+        toast.success(`${result.user.displayName || "고객"}님, 반갑습니다.`);
+      }
+    } catch (error) {
+      const code = (error as { code?: string }).code;
+      if (code !== "auth/popup-closed-by-user" && code !== "auth/cancelled-popup-request") {
+        toast.error("Google 로그인에 실패했습니다. 잠시 후 다시 시도해 주세요.");
+      }
+    } finally {
+      setAuthBusy(false);
+    }
+  };
+
   const cartPanel = (
     <div className="cart-panel-body">
       {cart.length === 0 ? (
@@ -176,7 +212,7 @@ export default function Storefront() {
   );
 
   return <>
-    <Header cartCount={cartCount} onNavigate={navigate} onCart={() => setCartOpen(true)} menuOpen={menuOpen} setMenuOpen={setMenuOpen} searchOpen={searchOpen} setSearchOpen={setSearchOpen} query={query} setQuery={setQuery} submitSearch={submitSearch} />
+    <Header cartCount={cartCount} onNavigate={navigate} onCart={() => setCartOpen(true)} menuOpen={menuOpen} setMenuOpen={setMenuOpen} searchOpen={searchOpen} setSearchOpen={setSearchOpen} query={query} setQuery={setQuery} submitSearch={submitSearch} user={user} authBusy={authBusy} onAuth={handleAuth} />
     {route.page === "home" && <Home onNavigate={navigate} addToCart={addToCart} setCategory={setCategory} setMaterial={setMaterial} />}
     {route.page === "shop" && <Shop onNavigate={navigate} addToCart={addToCart} query={query} setQuery={setQuery} category={category} setCategory={setCategory} material={material} setMaterial={setMaterial} price={price} setPrice={setPrice} sort={sort} setSort={setSort} />}
     {route.page === "product" && <ProductDetail product={products.find(p => p.id === route.productId) || products[0]} addToCart={addToCart} onNavigate={navigate} />}
@@ -189,9 +225,10 @@ export default function Storefront() {
   </>;
 }
 
-function Header({ cartCount, onNavigate, onCart, menuOpen, setMenuOpen, searchOpen, setSearchOpen, query, setQuery, submitSearch }: {
+function Header({ cartCount, onNavigate, onCart, menuOpen, setMenuOpen, searchOpen, setSearchOpen, query, setQuery, submitSearch, user, authBusy, onAuth }: {
   cartCount: number; onNavigate: (p: string) => void; onCart: () => void; menuOpen: boolean; setMenuOpen: (v: boolean) => void;
   searchOpen: boolean; setSearchOpen: (v: boolean) => void; query: string; setQuery: (v: string) => void; submitSearch: (e: FormEvent<HTMLFormElement>) => void;
+  user: FirebaseUser | null; authBusy: boolean; onAuth: () => void;
 }) {
   const journal = () => { onNavigate("/"); setTimeout(() => document.getElementById("journal")?.scrollIntoView({ behavior: "smooth" }), 40); };
   return <>
@@ -199,10 +236,10 @@ function Header({ cartCount, onNavigate, onCart, menuOpen, setMenuOpen, searchOp
       <button className="icon-button mobile-only" aria-label="메뉴 열기" onClick={() => setMenuOpen(true)}><Menu /></button>
       <button className="brand" onClick={() => onNavigate("/")}>OF TABLE</button>
       <nav aria-label="주요 메뉴"><button onClick={() => onNavigate("/shop")}>Shop</button><button onClick={() => onNavigate("/shop")}>Collections</button><button onClick={journal}>Journal</button><button onClick={() => onNavigate("/about")}>About</button></nav>
-      <div className="header-actions"><button className="icon-button desktop-search" aria-label="검색 열기" aria-expanded={searchOpen} onClick={() => setSearchOpen(!searchOpen)}><Search /></button><button className="icon-button bag-button" aria-label={`장바구니 상품 ${cartCount}개`} onClick={onCart}><ShoppingBag /><span>{cartCount}</span></button></div>
+      <div className="header-actions"><button className="icon-button desktop-search" aria-label="검색 열기" aria-expanded={searchOpen} onClick={() => setSearchOpen(!searchOpen)}><Search /></button><button className="auth-button" type="button" disabled={authBusy} onClick={onAuth} aria-label={user ? `${user.displayName || "Google 계정"} 로그아웃` : "Google 계정으로 로그인"}>{user?.photoURL ? <img src={user.photoURL} alt="" referrerPolicy="no-referrer" /> : <UserRound />}<span>{authBusy ? "확인 중" : user ? (user.displayName?.split(" ")[0] || "계정") : "Google 로그인"}</span></button><button className="icon-button bag-button" aria-label={`장바구니 상품 ${cartCount}개`} onClick={onCart}><ShoppingBag /><span>{cartCount}</span></button></div>
       {searchOpen && <form className="header-search" onSubmit={submitSearch}><Search /><input autoFocus value={query} onChange={e => setQuery(e.target.value)} placeholder="접시, 유리, 실버웨어 검색" aria-label="상품 검색" /><button type="button" aria-label="검색 닫기" onClick={() => setSearchOpen(false)}><X /></button></form>}
     </header>
-    <Sheet open={menuOpen} onOpenChange={setMenuOpen}><SheetContent side="left" className="menu-sheet"><SheetHeader><SheetTitle>OF TABLE</SheetTitle><SheetDescription>메뉴</SheetDescription></SheetHeader><nav><button onClick={() => onNavigate("/shop")}>Shop</button><button onClick={() => onNavigate("/shop")}>Collections</button><button onClick={journal}>Journal</button><button onClick={() => onNavigate("/about")}>About</button></nav><form onSubmit={submitSearch}><Search /><input value={query} onChange={e => setQuery(e.target.value)} placeholder="상품 검색" /><button type="submit">검색</button></form></SheetContent></Sheet>
+    <Sheet open={menuOpen} onOpenChange={setMenuOpen}><SheetContent side="left" className="menu-sheet"><SheetHeader><SheetTitle>OF TABLE</SheetTitle><SheetDescription>메뉴</SheetDescription></SheetHeader><nav><button onClick={() => onNavigate("/shop")}>Shop</button><button onClick={() => onNavigate("/shop")}>Collections</button><button onClick={journal}>Journal</button><button onClick={() => onNavigate("/about")}>About</button></nav><button className="menu-auth-button" type="button" disabled={authBusy} onClick={onAuth}><UserRound />{user ? `${user.displayName || "Google 계정"} · 로그아웃` : "Google 계정으로 로그인"}</button><form onSubmit={submitSearch}><Search /><input value={query} onChange={e => setQuery(e.target.value)} placeholder="상품 검색" /><button type="submit">검색</button></form></SheetContent></Sheet>
   </>;
 }
 
